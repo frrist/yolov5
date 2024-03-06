@@ -30,6 +30,7 @@ Usage - formats:
 
 import argparse
 import csv
+import json
 import os
 import platform
 import sys
@@ -96,6 +97,7 @@ def run(
     half=False,  # use FP16 half-precision inference
     dnn=False,  # use OpenCV DNN for ONNX inference
     vid_stride=1,  # video frame-rate stride
+    timestamp=True, # include timestamp of when object is captured
 ):
     source = str(source)
     save_img = not nosave and not source.endswith(".txt")  # save inference images
@@ -132,6 +134,7 @@ def run(
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
     for path, im, im0s, vid_cap, s in dataset:
+        detect_ts = 0
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
@@ -163,11 +166,19 @@ def run(
 
         # Define the path for the CSV file
         csv_path = save_dir / "predictions.csv"
+        ndjson_path = save_dir / "predictions.json"
+
+        def write_to_ndjson(image_name, prediction, cls, confidence, timestamp, xywh):
+            """Writes prediction data for an image to a NDJSON file, appending if the file exists."""
+            data = {"Image Name": image_name, "Prediction": prediction, "Class": cls, "Confidence": confidence, "Timestamp": timestamp, "XYWH": xywh}
+            with open(ndjson_path, mode="a") as f:
+                # Serialize data dictionary to JSON formatted string and write it with a newline
+                f.write(json.dumps(data) + '\n')
 
         # Create or append to the CSV file
-        def write_to_csv(image_name, prediction, confidence):
+        def write_to_csv(image_name, prediction, confidence, timestamp):
             """Writes prediction data for an image to a CSV file, appending if the file exists."""
-            data = {"Image Name": image_name, "Prediction": prediction, "Confidence": confidence}
+            data = {"Image Name": image_name, "Prediction": prediction, "Confidence": confidence, "Timestamp": timestamp}
             with open(csv_path, mode="a", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=data.keys())
                 if not csv_path.is_file():
@@ -199,6 +210,8 @@ def run(
                     n = (det[:, 5] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
+                    detect_ts += n.item()
+
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     c = int(cls)  # integer class
@@ -207,7 +220,9 @@ def run(
                     confidence_str = f"{confidence:.2f}"
 
                     if save_csv:
-                        write_to_csv(p.name, label, confidence_str)
+                        write_to_csv(p.name, label, confidence_str, dataset.timestamp_string)
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        write_to_ndjson(p.name, label, c, confidence_str, dataset.timestamp_string, xywh)
 
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
@@ -221,6 +236,10 @@ def run(
                         annotator.box_label(xyxy, label, color=colors(c, True))
                     if save_crop:
                         save_one_box(xyxy, imc, file=save_dir / "crops" / names[c] / f"{p.stem}.jpg", BGR=True)
+
+            # Print time (inference-only)
+            if timestamp and detect_ts != 0:
+                print(dataset.timestamp_string)
 
             # Stream results
             im0 = annotator.result()

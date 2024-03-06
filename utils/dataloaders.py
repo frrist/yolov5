@@ -372,6 +372,15 @@ class LoadImages:
             for _ in range(self.vid_stride):
                 self.cap.grab()
             ret_val, im0 = self.cap.retrieve()
+            self.timestamp_ms = self.cap.get(cv2.CAP_PROP_POS_MSEC)
+            self.timestamp_ms_disp = int(self.timestamp_ms % 1000)  # Milliseconds
+            self.timestamp_sec = int((self.timestamp_ms / 1000) % 60)  # Seconds
+            self.timestamp_min = int((self.timestamp_ms / (1000 * 60)) % 60)  # Minutes
+            self.timestamp_hour = int((self.timestamp_ms / (1000 * 60 * 60)) % 24)  # Hours
+            self.timestamp_day = int((self.timestamp_ms / (1000 * 60 * 60 * 24)))  # Days
+            # Format the timestamp as DD:HH:MM:SS:MS
+            self.timestamp_string = f"{self.timestamp_day:02d}:{self.timestamp_hour:02d}:{self.timestamp_min:02d}:{self.timestamp_sec:02d}:{self.timestamp_ms_disp:03d}"
+
             while not ret_val:
                 self.count += 1
                 self.cap.release()
